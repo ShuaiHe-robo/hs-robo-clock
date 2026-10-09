@@ -1,0 +1,6 @@
+<resources>
+    <string name="app_name">朝醒</string>
+    <string name="focus_blocked_app">%1$s 已暂时锁定</string>
+    <string name="focus_recovery_at">%1$s 自动恢复</string>
+    <string name="accessibility_description">在你设置的时间内，检测所选应用的窗口并显示拦截页。只处理应用包名，不读取屏幕文字。电话、桌面和系统权限入口保持可用。可等待 60 秒并再次确认应急解除；你随时可以在系统设置中关闭服务。</string>
+</resources>
