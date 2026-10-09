@@ -10,9 +10,9 @@
 
 ## 界面展示
 
-以下为模拟器截图，使用空白或测试数据。
+以下为当前版本的浅色主题模拟器截图，使用空白数据。
 
-| 闹钟 | 专注 | 计时器（深色） | 设置 |
+| 闹钟 | 专注 | 计时器 | 设置 |
 | --- | --- | --- | --- |
 | <img src=".github/screenshots/emulator-alarm.png" alt="闹钟页面" width="200" /> | <img src=".github/screenshots/emulator-focus.png" alt="专注页面" width="200" /> | <img src=".github/screenshots/emulator-timer.png" alt="计时器页面" width="200" /> | <img src=".github/screenshots/emulator-settings.png" alt="设置页面" width="200" /> |
 
