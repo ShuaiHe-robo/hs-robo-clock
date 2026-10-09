@@ -8,6 +8,14 @@
 
 应用无需账号，没有云同步。规则与会话保存在设备本地，使用 Room、DataStore 和设备保护存储；当前 Manifest 未声明网络权限。
 
+## 界面展示
+
+以下为模拟器截图，使用空白或测试数据。
+
+| 闹钟 | 专注 | 计时器（深色） | 设置 |
+| --- | --- | --- | --- |
+| <img src=".github/screenshots/emulator-alarm.png" alt="闹钟页面" width="200" /> | <img src=".github/screenshots/emulator-focus.png" alt="专注页面" width="200" /> | <img src=".github/screenshots/emulator-timer.png" alt="计时器页面" width="200" /> | <img src=".github/screenshots/emulator-settings.png" alt="设置页面" width="200" /> |
+
 ## 核心功能
 
 ### 闹钟
