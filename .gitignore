@@ -7,7 +7,7 @@ local.properties
 captures/
 artifacts/
 design/
-docs/screenshots/
+docs/
 .agents/
 .claude/
 .codex-remote-attachments/

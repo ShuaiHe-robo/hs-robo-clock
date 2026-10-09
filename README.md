@@ -135,13 +135,6 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 - 闹钟提供 Direct Boot 恢复路径，但首次解锁前响铃、Doze 与长待机行为尚未完成完整真机验证。
 - 当前启用 16 KB 页大小兼容模式；不能视为全部原生库均已满足 16 KB 对齐或已完成真机兼容验证。
 
-## 项目文档与字体许可
-
-- [实现计划](docs/CODE_PLAN.md)
-- [计时器行为与验证记录](docs/TIMER_ACCEPTANCE.md)
-- [应用锁恢复记录](docs/FOCUS_RECOVERY.md)
-- [设备验收范围](docs/DEVICE_ACCEPTANCE.md)
-
-验收文档属于历史记录，不代表当前提交已重新执行全部测试；其中部分截图与日志仅保存在本地，未随仓库上传。
+## 字体许可
 
 内置字体使用 SIL Open Font License 1.1，许可文本随项目保留：[Gelasio](app/src/main/assets/fonts/Gelasio-OFL.txt)、[霞鹜文楷 GB Lite](app/src/main/assets/fonts/LXGWWenKaiGBLite-OFL.txt)。字体许可仅适用于对应字体；项目尚未提供独立的代码许可证。
