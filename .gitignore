@@ -10,6 +10,7 @@ design/
 docs/screenshots/
 .agents/
 .claude/
+.codex-remote-attachments/
 .vscode/
 *.apk
 *.aab
