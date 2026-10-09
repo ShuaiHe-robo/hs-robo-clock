@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="app/src/main/res/mipmap-nodpi/daybreak_icon.png" alt="朝醒应用图标" width="160" height="160" />
+</p>
+
 # 朝醒（hs-robo-clock）
 
 原生 Android 本地闹钟、计时器与定时应用锁，使用 Kotlin、Jetpack Compose 和 Material 3 构建，面向日常自用。
