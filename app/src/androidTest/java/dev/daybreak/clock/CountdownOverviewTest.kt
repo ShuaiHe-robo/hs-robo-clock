@@ -8,6 +8,7 @@ import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.daybreak.clock.data.FocusRule
+import dev.daybreak.clock.data.Alarm
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
@@ -63,6 +64,8 @@ class CountdownOverviewTest {
         val future = FocusRule(id = "countdown-$stamp", label = "专注倒计时验证",
             startMinute = minute(now.plusHours(2)), endMinute = minute(now.plusHours(3)), days = 127,
             packages = "dev.daybreak.clock.countdown.target")
+        val reminder = Alarm(id = "overview-alarm-$stamp", label = "倒计时概览验证", days = 127)
+        runBlocking(Dispatchers.IO) { app.alarms.save(reminder) }
         automation.serviceInfo = automation.serviceInfo.apply {
             flags = flags or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
         }
@@ -92,6 +95,7 @@ class CountdownOverviewTest {
         } finally {
             scenario.close()
             runBlocking(Dispatchers.IO) {
+                app.alarms.delete(reminder.id)
                 app.focus.delete(future.id)
                 app.database.dao().protectedFocusSessions().filter { it.ruleId == future.id }.forEach {
                     app.database.dao().saveFocusSession(it.copy(state = "EXPIRED", releaseToken = null))

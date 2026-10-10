@@ -5,6 +5,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.daybreak.clock.data.BootStore
 import dev.daybreak.clock.domain.MathChallenge
+import dev.daybreak.clock.domain.execution.RecoveryReason
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
 import org.junit.Test
@@ -25,7 +26,7 @@ class TimerExecutionTest {
             assertTrue(paused.remaining in 1..60_000)
             assertFalse(app.alarms.fire(initial.occurrenceId))
             assertEquals(paused, BootStore(app).timer(initial.id))
-            app.alarms.recover(true)
+            app.alarms.recover(RecoveryReason.CLOCK_CHANGED)
             assertEquals("PAUSED", app.bootStore.timer(initial.id)!!.state)
             app.alarms.resumeTimer(initial.id)
             val resumed = app.bootStore.timer(initial.id)!!
@@ -33,7 +34,7 @@ class TimerExecutionTest {
             assertFalse(app.alarms.fire(initial.occurrenceId))
             // Advance the persisted deadline, then recover the actual AlarmManager entry.
             app.bootStore.putTimer(resumed.copy(endElapsed = SystemClock.elapsedRealtime() - 1, endAt = System.currentTimeMillis() - 1))
-            app.alarms.recover(true)
+            app.alarms.recover(RecoveryReason.CLOCK_CHANGED)
             assertTrue(app.alarms.fire(resumed.occurrenceId))
             assertTrue(app.alarms.fire(resumed.occurrenceId))
             val ringing = app.bootStore.session(resumed.occurrenceId)!!

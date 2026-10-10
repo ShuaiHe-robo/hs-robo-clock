@@ -19,17 +19,21 @@ class AlarmAudio(private val context: Context) {
     private val attributes = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ALARM)
         .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build()
     private var fallbackCallback: (() -> Unit)? = null
+    private var startedCallback: (() -> Unit)? = null
+    private var reportedStart = false
     private var focusGranted = false
     private val worker = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    fun play(uri: String?, locked: Boolean = false, preview: Boolean = false, fallback: () -> Unit = {}) {
+    fun play(uri: String?, locked: Boolean = false, preview: Boolean = false, started: () -> Unit = {}, fallback: () -> Unit = {}) {
         stop()
         this.preview = preview
         fallbackCallback = fallback
+        startedCallback = started
+        reportedStart = false
         val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
             .setAcceptsDelayedFocusGain(true).setAudioAttributes(attributes).setOnAudioFocusChangeListener { change ->
                 focusGranted = change == AudioManager.AUDIOFOCUS_GAIN
-                if (focusGranted) runCatching { player?.start() }
+                if (focusGranted) player?.let { media -> runCatching { media.start(); reportStart() } }
                 else runCatching { player?.pause() }
             }.build()
         focus = request
@@ -63,7 +67,7 @@ class AlarmAudio(private val context: Context) {
             media.setOnPreparedListener {
                 if (generation == token && !settled) {
                     settled = true; handler.removeCallbacks(timeout)
-                    if (focusGranted) runCatching { it.start() }.onFailure { fallbackCallback?.invoke(); attempt(candidates, index + 1, token) }
+                    if (focusGranted) runCatching { it.start(); reportStart() }.onFailure { fallbackCallback?.invoke(); attempt(candidates, index + 1, token) }
                 }
             }
             media.setOnErrorListener { _, _, _ ->
@@ -87,6 +91,9 @@ class AlarmAudio(private val context: Context) {
             }
             handler.postDelayed(timeout, 3000)
         } catch (e: Exception) { fail() }
+    }
+    private fun reportStart() {
+        if (!reportedStart) { reportedStart = true; startedCallback?.invoke() }
     }
     fun stop() {
         generation++

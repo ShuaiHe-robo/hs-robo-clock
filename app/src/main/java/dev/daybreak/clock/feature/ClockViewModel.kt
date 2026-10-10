@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.daybreak.clock.ClockApplication
 import dev.daybreak.clock.data.*
+import dev.daybreak.clock.domain.execution.RecoveryReason
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 
@@ -16,7 +17,9 @@ class ClockViewModel(application: Application) : AndroidViewModel(application) {
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), ClockState())
     val ringing = app.alarms.sessions
     val timers = app.alarms.timers
+    val alarmReliability = app.alarmReliability.state
     val focus = app.focus.sessions
+    val focusBoundary = app.focus.boundary
     val dark = app.preferences.dark.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
     private val errors = MutableStateFlow<String?>(null)
     val error = errors.asStateFlow()
@@ -40,7 +43,8 @@ class ClockViewModel(application: Application) : AndroidViewModel(application) {
     fun cancelTimer(id: String) = operate { app.alarms.cancelTimer(id) }
     fun saveFocus(rule: FocusRule, done: () -> Unit = {}) = operate(done) { app.focus.save(rule) }
     fun deleteFocus(id: String, done: () -> Unit = {}) = operate(done) { app.focus.delete(id) }
-    fun rebuild() = operate { app.alarms.recover(); app.focus.refresh() }
+    fun rebuild() = operate { app.recoverSchedules(RecoveryReason.APP_RESUME)?.let { throw IllegalStateException(it) } }
+    fun acknowledgeAlarmWarnings(stoppedAt: Long, missedAt: Long) = operate { app.alarmReliability.acknowledge(stoppedAt, missedAt) }
     fun theme(dark: Boolean) = operate { app.preferences.setDark(dark) }
     fun beginRelease() = operate { app.focus.beginRelease() }
     fun cancelRelease(token: String) = operate { app.focus.cancelRelease(token) }

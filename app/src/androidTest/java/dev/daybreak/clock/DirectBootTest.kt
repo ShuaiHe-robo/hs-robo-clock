@@ -5,7 +5,9 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.daybreak.clock.data.Alarm
 import dev.daybreak.clock.domain.MathChallenge
-import dev.daybreak.clock.platform.alarm.AndroidAlarmScheduler
+import dev.daybreak.clock.platform.execution.AndroidExecutionScheduler
+import dev.daybreak.clock.domain.execution.ScheduledWake
+import dev.daybreak.clock.domain.execution.WakeKey
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
 import org.junit.Assume.assumeTrue
@@ -24,7 +26,7 @@ class DirectBootTest {
         val session = app.bootStore.allSessions().first { it.alarmId == alarm.id && it.state == "PENDING" }
         val due = session.copy(scheduledAt = System.currentTimeMillis() + 90_000)
         app.bootStore.putSession(due); app.database.dao().saveRinging(due)
-        assertNull(AndroidAlarmScheduler(app).schedule(due))
+        assertNull(AndroidExecutionScheduler(app).schedule(ScheduledWake(WakeKey.alarm(due.id), due.scheduledAt)).error)
         android.util.Log.i("BootFixture", "Prepared occurrence ${due.id} at ${due.scheduledAt}; question ${due.left},${due.right},${due.subtract}")
     }
     @Test fun verifyAfterUnlock() = runBlocking {

@@ -9,6 +9,8 @@ import dev.daybreak.clock.R
 import dev.daybreak.clock.clock
 import dev.daybreak.clock.data.RingingSession
 import kotlinx.coroutines.*
+import dev.daybreak.clock.domain.alarm.RingingController
+import dev.daybreak.clock.domain.alarm.RingingOutput
 
 class AlarmRingingService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -16,7 +18,7 @@ class AlarmRingingService : Service() {
     private var currentId: String? = null
     private var wake: PowerManager.WakeLock? = null
     private var vibrator: Vibrator? = null
-    private var collector: Job? = null
+    private lateinit var controller: RingingController
 
     override fun onCreate() {
         super.onCreate()
@@ -25,32 +27,43 @@ class AlarmRingingService : Service() {
         }
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         audio = AlarmAudio(this)
+        controller = RingingController(clock.alarms, scope, object : RingingOutput {
+            override fun render(session: RingingSession?, newlySelected: Boolean) = renderPlayback(session, newlySelected)
+            override fun finish() { stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
+        }, clock.alarmReliability)
         vibrator = getSystemService(Vibrator::class.java)
-        wake = getSystemService(PowerManager::class.java).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Daybreak:Ringing").apply { acquire(10 * 60 * 1000L) }
+        wake = getSystemService(PowerManager::class.java).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Daybreak:Ringing").apply {
+            setReferenceCounted(false)
+            acquire(10 * 60 * 1000L)
+        }
+        // Answer-based dismissal can last longer than ten minutes. Retain a bounded lock
+        // while this user-visible service is alive; destruction always releases it.
+        scope.launch { while (isActive) { delay(9 * 60 * 1000L); wake?.acquire(10 * 60 * 1000L) } }
     }
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val id = intent?.getStringExtra("occurrence")
-        val snapshot = id?.let { clock.bootStore.session(it) }
-            ?: clock.bootStore.allSessions().firstOrNull { it.state == "RINGING" }
-        startForeground(1001, notification(snapshot, fullScreen = currentId == null), ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
-        scope.launch {
-            if (intent?.action == "DISMISS" && id != null) clock.alarms.dismiss(id, intent.getStringExtra("answer"))
-            else if (id != null) clock.alarms.fire(id)
-            if (collector == null) collector = scope.launch {
-                clock.alarms.sessions.collect { sessions ->
-                    val next = sessions.firstOrNull { it.state == "RINGING" }
-                    if (next == null) { audio.stop(); vibrator?.cancel(); currentId = null; stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
-                    else if (next.id != currentId) {
-                        currentId = next.id
-                        audio.play(next.ringtoneUri, locked = !clock.unlocked()) { clock.scope.launch { clock.alarms.markFallback(next.id) } }
-                        vibrator?.cancel()
-                        if (next.vibrate) vibrator?.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 500, 700), 0))
-                        getSystemService(NotificationManager::class.java).notify(1001, notification(next, true))
-                    }
-                }
-            }
-        }
+        val snapshot = clock.alarms.sessions.value.firstOrNull { it.state == "RINGING" }
+        // Start within the platform deadline. Full-screen UI and audio wait for validation,
+        // so a cancelled occurrence delivered during an edit cannot ring or steal the screen.
+        startForeground(1001, notification(snapshot, fullScreen = false), ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
+        clock.alarmReliability.event("SERVICE_FOREGROUND", id, intent?.action.orEmpty())
+        controller.deliver(id)
         return START_STICKY
+    }
+    private fun renderPlayback(next: RingingSession?, changed: Boolean) {
+        if (next == null) {
+            audio.stop(); vibrator?.cancel(); currentId = null
+            return
+        }
+        if (changed) {
+            currentId = next.id
+            audio.play(next.ringtoneUri, locked = !clock.unlocked(),
+                started = { clock.scope.launch { clock.alarmReliability.event("AUDIO_STARTED", next.id) } },
+                fallback = { clock.scope.launch { clock.alarmReliability.event("AUDIO_FALLBACK", next.id); clock.alarms.markFallback(next.id) } })
+            vibrator?.cancel()
+            if (next.vibrate) vibrator?.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 500, 700), 0))
+        }
+        getSystemService(NotificationManager::class.java).notify(1001, notification(next, changed))
     }
     private fun notification(session: RingingSession?, fullScreen: Boolean): Notification {
         val open = PendingIntent.getActivity(this, 0, Intent(this, AlarmActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
@@ -64,7 +77,8 @@ class AlarmRingingService : Service() {
     }
     override fun onBind(intent: Intent?) = null
     override fun onDestroy() {
-        scope.cancel(); audio.stop(); vibrator?.cancel()
+        clock.alarmReliability.event("SERVICE_DESTROYED", currentId)
+        controller.close(); scope.cancel(); audio.stop(); vibrator?.cancel()
         if (wake?.isHeld == true) wake?.release()
         super.onDestroy()
     }

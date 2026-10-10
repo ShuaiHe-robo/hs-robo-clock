@@ -10,7 +10,7 @@
 
 ## 界面展示
 
-以下为当前版本的浅色主题模拟器截图，使用空白数据。
+以下为浅色主题界面示例，使用空白数据。
 
 | 闹钟 | 专注 | 计时器 | 设置 |
 | --- | --- | --- | --- |
@@ -65,7 +65,7 @@
 | Compose BOM / KSP | 2026.02.01 / 2.3.6 |
 | compileSdk / targetSdk / minSdk | 37 / 37 / 29 |
 | 开发使用的 JDK / 字节码目标 | JDK 25 / Java 17 |
-| 应用包名 / 版本 | `dev.daybreak.clock` / `0.1.0` |
+| 应用包名 / 版本 | `dev.daybreak.clock` / `0.1.2` |
 
 安装 Android SDK Platform 37，并将 `JAVA_HOME` 指向本机 JDK。Java 17 是字节码目标，不代表当前 AGP / Gradle 工具链可用 JDK 17 构建。首次构建需要联网下载依赖。
 
@@ -120,7 +120,7 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 .\gradlew.bat :app:connectedDebugAndroidTest
 ```
 
-单元测试覆盖时间规则、计时器、倒计时文本和服务状态等逻辑；设备测试覆盖执行、恢复与界面流程。`connectedDebugAndroidTest` 需要已连接的设备或模拟器。真实声音、振动、锁屏和长待机效果仍需在目标手机上验证。
+当前版本已通过 44 项单元测试及 19 个不同设备用例；设备用例经分批运行及修复后的复跑完成。单元测试覆盖共享执行核心、闹钟和专注状态转换、时间规则、计时器与服务状态；设备测试覆盖系统调度、恢复与界面流程。`connectedDebugAndroidTest` 需要已连接的设备或模拟器。真实声音、振动、锁屏和长待机效果仍需在目标手机上验证。
 
 ## 源码结构
 
@@ -130,10 +130,16 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 | --- | --- |
 | `ui/`、`feature/` | Compose 界面、编辑流程与 ViewModel |
 | `domain/` | 时间计算、跨午夜规则、算术题与应急等待 |
+| `domain/execution/` | 共享执行核心、时间采样、命令串行与调度接口 |
+| `domain/alarm/` | 闹钟和计时器状态转换、响铃输出控制器 |
+| `domain/focus/` | 专注窗口、应急解除与输出控制器 |
 | `data/` | Room 数据库、DataStore 偏好及设备保护执行日志 |
-| `platform/alarm/` | 精确调度、响铃、通知、铃声与恢复 |
-| `platform/focus/` | 专注会话、应用筛选、无障碍拦截与边界刷新 |
+| `platform/execution/` | Android 时间与系统调度适配 |
+| `platform/alarm/` | Android 响铃存储、通知、音频与恢复适配 |
+| `platform/focus/` | 专注事务存储、应用筛选、窗口包名与无障碍覆盖适配 |
 | `app/src/test/`、`app/src/androidTest/` | 单元测试与设备测试 |
+
+闹钟与专注共用执行核心、时间采样、系统调度和恢复入口，业务状态各自持久化。
 
 ## 现有限制
 

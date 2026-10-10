@@ -2,19 +2,22 @@ package dev.daybreak.clock.platform
 
 import android.app.AlarmManager
 import android.app.NotificationManager
+import android.app.ActivityManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.SystemClock
+import android.os.PowerManager
 import android.provider.Settings
 import androidx.core.app.NotificationManagerCompat
 import dev.daybreak.clock.platform.focus.FocusAccessibilityService
 import dev.daybreak.clock.platform.focus.FocusProtectionStatus
 import dev.daybreak.clock.platform.focus.FocusServiceRuntime
 
-data class Capabilities(val exact: Boolean, val notifications: Boolean, val fullScreen: Boolean, val focusStatus: FocusProtectionStatus) {
+data class Capabilities(val exact: Boolean, val notifications: Boolean, val fullScreen: Boolean, val focusStatus: FocusProtectionStatus,
+    val batteryExempt: Boolean = false, val backgroundRestricted: Boolean = false) {
     val accessibility: Boolean get() = focusStatus == FocusProtectionStatus.RUNNING
 }
 fun Context.capabilities() = Capabilities(
@@ -26,7 +29,9 @@ fun Context.capabilities() = Capabilities(
             Settings.Secure.getString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
                 ?.split(':')?.any { ComponentName.unflattenFromString(it) == ComponentName(this, FocusAccessibilityService::class.java) } == true,
         nowElapsed = SystemClock.elapsedRealtime()
-    )
+    ),
+    batteryExempt = getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName),
+    backgroundRestricted = getSystemService(ActivityManager::class.java).isBackgroundRestricted
 )
 fun Context.openSetting(action: String) {
     val intent = Intent(action).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)

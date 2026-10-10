@@ -48,6 +48,7 @@ import dev.daybreak.clock.domain.TimeRules
 import dev.daybreak.clock.feature.*
 import dev.daybreak.clock.platform.*
 import dev.daybreak.clock.platform.alarm.AlarmActivity
+import dev.daybreak.clock.platform.alarm.AlarmReliabilityState
 import dev.daybreak.clock.platform.focus.FocusProtectionStatus
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.CancellationException
@@ -66,6 +67,7 @@ fun ClockApp(vm: ClockViewModel) {
     val lifecycle = LocalLifecycleOwner.current
     val state by vm.state.collectAsStateWithLifecycle()
     val ringing by vm.ringing.collectAsStateWithLifecycle()
+    val alarmReliability by vm.alarmReliability.collectAsStateWithLifecycle()
     val active by vm.focus.collectAsStateWithLifecycle()
     val dark by vm.dark.collectAsStateWithLifecycle()
     val busy by vm.busy.collectAsStateWithLifecycle()
@@ -117,6 +119,7 @@ fun ClockApp(vm: ClockViewModel) {
                             0 -> AlarmList(state, ringing.filterNot { it.isTimer }, capabilities, busy, onEdit = { edit("alarm", it) },
                                 onAdd = { edit("alarm") },
                                 onToggle = { vm.saveAlarm(it.copy(enabled = !it.enabled)) }, onSettings = { tab = 3 },
+                                reliability = alarmReliability, onAcknowledge = vm::acknowledgeAlarmWarnings,
                                 bottomClearance = bottomClearance, modifier = Modifier.fillMaxSize())
                             1 -> FocusList(state, active, capabilities.focusStatus, busy, vm, onEdit = { edit("focus", it) },
                                 onAdd = { edit("focus") },
@@ -137,11 +140,13 @@ fun ClockApp(vm: ClockViewModel) {
 
 @Composable
 private fun AlarmList(state: ClockState, sessions: List<RingingSession>, capabilities: Capabilities, busy: Boolean, onEdit: (String) -> Unit,
-    onAdd: () -> Unit, onToggle: (Alarm) -> Unit, onSettings: () -> Unit, bottomClearance: Dp, modifier: Modifier) {
+    onAdd: () -> Unit, onToggle: (Alarm) -> Unit, onSettings: () -> Unit, reliability: AlarmReliabilityState,
+    onAcknowledge: (Long, Long) -> Unit, bottomClearance: Dp, modifier: Modifier) {
     val context = LocalContext.current
     val next = sessions.filter { it.state == "PENDING" && it.scheduleError == null }.minByOrNull { it.scheduledAt }
     val enabledCount = state.alarms.count { it.enabled }
     val running = sessions.count { it.state == "RINGING" }
+    val missed = sessions.filter { it.state == "MISSED" && it.scheduledAt > reliability.acknowledgedMissedAt }
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) {
         while (true) {
@@ -174,6 +179,24 @@ private fun AlarmList(state: ClockState, sessions: List<RingingSession>, capabil
         }
         if (!capabilities.exact || !capabilities.notifications || !capabilities.fullScreen) item {
             CapabilityNotice(if (!capabilities.exact) "精确闹钟尚未授权" else if (!capabilities.notifications) "通知已关闭，响铃入口可能无法显示" else "全屏提醒尚未授权，将使用通知入口", onSettings)
+        }
+        if (missed.isNotEmpty() || reliability.showStopNotice) item {
+            Surface(shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.errorContainer) {
+                Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(if (missed.isNotEmpty()) "有 ${missed.size} 次闹钟未按计划响铃" else "后台运行曾中断",
+                        style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onErrorContainer)
+                    missed.maxByOrNull { it.scheduledAt }?.let { latest ->
+                        Text("最近一次：${Instant.ofEpochMilli(latest.scheduledAt).atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("M月d日 HH:mm"))} · ${latest.label.ifBlank { "闹钟" }}",
+                            color = MaterialTheme.colorScheme.onErrorContainer)
+                    }
+                    Text("请检查朝醒的后台运行设置。系统强停会取消闹钟，重新打开应用后才能恢复后续计划。",
+                        style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onErrorContainer)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TextButton(onClick = onSettings) { Text("检查后台运行") }
+                        TextButton(onClick = { onAcknowledge(reliability.stoppedAt, missed.maxOfOrNull { it.scheduledAt } ?: 0) }, enabled = !busy) { Text("我知道了") }
+                    }
+                }
+            }
         }
         if (running > 0) item {
             Button(onClick = { context.startActivity(android.content.Intent(context, AlarmActivity::class.java)) }, modifier = Modifier.fillMaxWidth()) { Text("有 $running 个闹钟正在响铃 · 进入关闭") }
@@ -209,31 +232,20 @@ private fun AlarmList(state: ClockState, sessions: List<RingingSession>, capabil
 }
 
 @Composable
-private fun FocusList(state: ClockState, active: List<FocusSession>, focusStatus: FocusProtectionStatus, busy: Boolean, vm: ClockViewModel,
+private fun FocusList(state: ClockState, snapshots: List<FocusSession>, focusStatus: FocusProtectionStatus, busy: Boolean, vm: ClockViewModel,
     onEdit: (String) -> Unit, onAdd: () -> Unit, onSettings: () -> Unit, bottomClearance: Dp, modifier: Modifier) {
     val context = LocalContext.current
     val accessibility = focusStatus == FocusProtectionStatus.RUNNING
+    val boundary by vm.focusBoundary.collectAsStateWithLifecycle()
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    val active = snapshots.filter { it.endAt > now }
     val nextFocus = remember(state.focusRules, now / 60_000) {
         state.focusRules.filter { it.enabled }.map { rule ->
             rule to TimeRules.nextFocusStart(rule.startMinute, rule.days, Instant.ofEpochMilli(now), ZoneId.systemDefault()).toEpochMilli()
         }.minByOrNull { it.second }
     }
     LaunchedEffect(Unit) {
-        var reportedFailure = false
         while (true) {
-            try {
-                context.clock.focus.refresh()
-                reportedFailure = false
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                if (!reportedFailure) {
-                    vm.report("专注计划刷新失败，请检查运行权限后重建计划")
-                    android.util.Log.e("Daybreak", "Focus page refresh failed; retrying", e)
-                    reportedFailure = true
-                }
-            }
             now = System.currentTimeMillis()
             delay(1000)
         }
@@ -252,6 +264,10 @@ private fun FocusList(state: ClockState, active: List<FocusSession>, focusStatus
             CountdownHeading("距离专注开始还有\n${countdownText(nextFocus.second - now)}", "${nextFocus.first.label} · $start")
         }
         if (!accessibility) item { CapabilityNotice(focusStatusText(focusStatus), onSettings) }
+        if (boundary.error != null) item { CapabilityNotice("专注计划登记失败，点按重试", vm::rebuild) }
+        else if (boundary.at != null && !boundary.exact) item {
+            CapabilityNotice("定时检查可能延迟，请允许精确闹钟") { context.openSetting(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM) }
+        }
         if (active.isNotEmpty()) item {
             Surface(shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.primaryContainer) {
                 Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -352,14 +368,17 @@ private fun focusStatusText(status: FocusProtectionStatus): String = when (statu
 private fun SettingsScreen(capabilities: Capabilities, dark: Boolean, state: ClockState, vm: ClockViewModel, requestNotifications: () -> Unit,
     bottomClearance: Dp, modifier: Modifier) {
     val context = LocalContext.current
+    val reliability by vm.alarmReliability.collectAsStateWithLifecycle()
     var openDrawer by rememberSaveable { mutableStateOf<String?>(null) }
     val ready = listOf(capabilities.exact, capabilities.notifications, capabilities.fullScreen, capabilities.accessibility).count { it }
     LazyColumn(modifier.fillMaxHeight(), contentPadding = PaddingValues(24.dp, 24.dp, 24.dp, bottomClearance), verticalArrangement = Arrangement.spacedBy(18.dp)) {
         item { PageHeading("设置") }
         item {
-            SettingsEntry("运行权限", if (ready == 4) "$ready / 4 已就绪" else "$ready / 4 已就绪 · ${4 - ready} 项需检查",
+            SettingsEntry("运行权限", if (ready == 4) "$ready / 4 已授权" else "$ready / 4 已授权 · ${4 - ready} 项需检查",
                 if (ready == 4) Icons.Outlined.CheckCircle else Icons.Outlined.Info) { openDrawer = "permissions" }
         }
+        item { SettingsEntry("闹钟后台运行", if (capabilities.backgroundRestricted) "系统限制后台运行，请检查" else "电池与厂商后台设置", Icons.Outlined.BatteryFull) { openDrawer = "background" } }
+        item { SettingsEntry("闹钟运行记录", "计划恢复、到点触发与声音播放", Icons.Outlined.History) { openDrawer = "alarm-history" } }
         item { SectionHeading("外观与计划") }
         item {
             Surface(shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.surfaceContainerLow) {
@@ -375,9 +394,10 @@ private fun SettingsScreen(capabilities: Capabilities, dark: Boolean, state: Clo
         }
     }
     when (openDrawer) {
-        "permissions" -> SettingsDrawer("运行权限", "$ready / 4 已就绪", "关闭权限抽屉", onDismiss = { openDrawer = null }) {
+        "permissions" -> SettingsDrawer("运行权限", "$ready / 4 已授权", "关闭权限抽屉", onDismiss = { openDrawer = null }) {
             item { SettingRow("精确闹钟", if (capabilities.exact) "已允许" else "未允许，闹钟无法排程", capabilities.exact) {
-                if (Build.VERSION.SDK_INT >= 31) context.openSetting(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM)
+                if (Build.VERSION.SDK_INT in 31..32) context.openSetting(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM)
+                else if (!capabilities.exact) context.openSetting(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
             } }
             item { SettingRow("通知", if (capabilities.notifications) "已允许" else "未允许，点击开启", capabilities.notifications, requestNotifications) }
             item { SettingRow("锁屏全屏提醒", if (capabilities.fullScreen) "已允许，系统仍可能展示横幅" else "未允许，将使用通知入口", capabilities.fullScreen) {
@@ -389,6 +409,20 @@ private fun SettingsScreen(capabilities: Capabilities, dark: Boolean, state: Clo
             item { UsageParagraph("后台运行", "若服务反复断开，请在朝醒的系统应用设置中将电池用量设为「不受限制」，并从三星的休眠、深度休眠应用列表中移除朝醒。") }
             item { OutlinedButton(onClick = { context.openSetting(Settings.ACTION_APPLICATION_DETAILS_SETTINGS) },
                 modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("打开朝醒系统设置") } }
+        }
+        "background" -> SettingsDrawer("闹钟后台运行", "", "关闭后台运行抽屉", verticalGap = 18.dp, onDismiss = { openDrawer = null }) {
+            item { UsageParagraph("系统电池限制", if (capabilities.backgroundRestricted) "系统正在限制朝醒后台运行，请将电池用量设为「不受限制」。" else "系统目前未报告朝醒受到后台运行限制。") }
+            item { UsageParagraph("省电优化", if (capabilities.batteryExempt) "朝醒已获系统省电优化豁免。" else "朝醒仍受到系统省电优化管理，请检查应用的电池设置。") }
+            item { UsageParagraph("三星后台策略", "还需检查休眠、深度休眠和自动优化中的朝醒应用项。若使用最大省电，请确认朝醒在允许的应用中。系统权限与电池豁免不能代表这些厂商设置已允许。") }
+            item { OutlinedButton(onClick = { context.openSetting(Settings.ACTION_APPLICATION_DETAILS_SETTINGS) }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("打开朝醒系统设置") } }
+        }
+        "alarm-history" -> SettingsDrawer("闹钟运行记录", "仅保存在本机", "关闭闹钟记录抽屉", verticalGap = 12.dp, onDismiss = { openDrawer = null }) {
+            val entries = reliability.events.asReversed().filter { alarmEventText(it.stage) != null }.take(30)
+            if (entries.isEmpty()) item { Text("还没有运行记录") }
+            items(entries) { entry ->
+                val label = entry.occurrence?.let { id -> context.clock.bootStore.session(id)?.label }?.takeIf { it.isNotBlank() }
+                Text("${Instant.ofEpochMilli(entry.at).atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("M月d日 HH:mm:ss"))} · ${alarmEventText(entry.stage)}${label?.let { " · $it" }.orEmpty()}", style = MaterialTheme.typography.bodyMedium)
+            }
         }
         "guide" -> SettingsDrawer("使用说明", "", "关闭说明抽屉", verticalGap = 18.dp, onDismiss = { openDrawer = null }) {
             item { UsageParagraph("三星手机使用提示", "请检查系统的休眠、深度休眠与电池后台限制。侧载 APK 若出现「受限设置」，按系统提示允许后再开启无障碍服务。") }
@@ -403,6 +437,21 @@ private fun SettingsScreen(capabilities: Capabilities, dark: Boolean, state: Clo
             }
         }
     }
+}
+
+private fun alarmEventText(stage: String): String? = when (stage) {
+    "RECOVERY_FINISHED" -> "计划恢复完成"
+    "RECOVERY_FAILED" -> "计划恢复失败"
+    "SCHEDULED" -> "已登记到点提醒"
+    "SCHEDULE_FAILED" -> "提醒登记失败"
+    "FIRE_RECEIVED" -> "收到到点提醒"
+    "RINGING" -> "开始响铃会话"
+    "AUDIO_STARTED" -> "开始播放铃声"
+    "AUDIO_FALLBACK" -> "尝试备用铃声"
+    "ENDED" -> "响铃已关闭"
+    "MISSED" -> "闹钟未按计划响铃"
+    "DELIVERY_FAILED", "SERVICE_START_FAILED" -> "响铃启动失败"
+    else -> null
 }
 
 @Composable

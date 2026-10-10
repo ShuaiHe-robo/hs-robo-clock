@@ -8,6 +8,7 @@ import android.view.*
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityWindowInfo
 import dev.daybreak.clock.clock
+import dev.daybreak.clock.domain.focus.*
 import kotlinx.coroutines.*
 import java.time.Instant
 import java.time.ZoneId
@@ -17,7 +18,7 @@ class FocusBoundaryReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val pending = goAsync()
         context.clock.scope.launch {
-            try { context.clock.focus.refresh() }
+            try { if (context.clock.unlocked()) context.clock.focus.boundaryDelivered() }
             catch (e: CancellationException) { throw e }
             catch (e: Exception) { android.util.Log.e("Daybreak", "Focus boundary refresh failed", e) }
             finally { pending.finish() }
@@ -25,135 +26,66 @@ class FocusBoundaryReceiver : BroadcastReceiver() {
     }
 }
 
+/** Window/overlay adapter. Window lifetimes, release waits and retry live in the domain modules. */
 class FocusAccessibilityService : AccessibilityService() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private var foregroundPackage: String? = null
     private var overlay: FocusOverlayView? = null
-    private lateinit var safeApps: ProtectedApps
-    private var token: String? = null
-    private var job: Job? = null
-    private var overlayFailed = false
+    private var controller: FocusController? = null
     private val windowManager by lazy { getSystemService(WindowManager::class.java) }
     private val appLabels = mutableMapOf<String, String>()
 
     override fun onServiceConnected() {
         super.onServiceConnected()
-        safeApps = ProtectedApps(this)
-        foregroundPackage = null
+        controller?.close()
         FocusServiceRuntime.connected()
-        job?.cancel()
-        job = scope.launch {
-            while (isActive) {
-                try {
-                    withContext(Dispatchers.IO) { clock.focus.refresh() }
-                    updateForegroundPackage()
-                    render()
-                    FocusServiceRuntime.checked(if (overlayFailed) FocusProtectionStatus.OVERLAY_UNAVAILABLE else null)
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    // A transient database/window/scheduler failure must not permanently
-                    // stop the only loop enforcing the protection window.
-                    FocusServiceRuntime.checked(FocusProtectionStatus.CHECK_FAILED)
-                    android.util.Log.e("Daybreak", "Focus check failed; retrying", e)
-                }
-                delay(1000)
-            }
-        }
+        controller = FocusController(clock.focus, scope, FocusForeground(::foregroundPackage), FocusOutput(::render),
+            checked = { state -> FocusServiceRuntime.checked(when (state) {
+                FocusCheck.RUNNING -> null
+                FocusCheck.CHECK_FAILED -> FocusProtectionStatus.CHECK_FAILED
+                FocusCheck.OUTPUT_UNAVAILABLE -> FocusProtectionStatus.OVERLAY_UNAVAILABLE
+            }) }, report = { android.util.Log.e("Daybreak", "Focus check failed; retrying", it) }).also { it.start() }
     }
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (!::safeApps.isInitialized || event == null) return
+        if (event == null) return
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED || event.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED) {
-            try {
-                val fallback = event.packageName?.toString()?.takeUnless { it == packageName && overlay != null }
-                updateForegroundPackage(fallback)
-                render()
-            } catch (e: Exception) {
-                FocusServiceRuntime.checked(FocusProtectionStatus.CHECK_FAILED)
-                android.util.Log.e("Daybreak", "Focus window check failed; retrying", e)
-            }
+            controller?.windowChanged(event.packageName?.toString()?.takeUnless { it == packageName && overlay != null })
         }
     }
-    private fun updateForegroundPackage(fallback: String? = null) {
-        // Query only the root's package name. Do not traverse nodes or read text.
-        // Excluding our overlay avoids mistaking its own window for the target app.
+    private fun foregroundPackage(fallback: String?): String? {
+        // Read only the root package; exclude our overlay and the keyboard.
         val candidates = getWindows().filter {
-            it.type != AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY &&
-                it.type != AccessibilityWindowInfo.TYPE_INPUT_METHOD
+            it.type != AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY && it.type != AccessibilityWindowInfo.TYPE_INPUT_METHOD
         }
-        val current = candidates.firstOrNull { it.isFocused }
-            ?: candidates.firstOrNull { it.isActive }
+        val current = candidates.firstOrNull { it.isFocused } ?: candidates.firstOrNull { it.isActive }
             ?: candidates.filter { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }.maxByOrNull { it.layer }
         val root = current?.root
-        val detected = try { root?.packageName?.toString() }
+        return try { root?.packageName?.toString() ?: fallback }
         finally { @Suppress("DEPRECATION") root?.recycle() }
-        foregroundPackage = detected ?: fallback ?: foregroundPackage
     }
-    private fun render() {
-        val packageName = foregroundPackage ?: run { removeOverlay(); return }
-        val blocked = !safeApps.isProtected(packageName) && packageName in clock.focus.blockedPackages()
-        if (!blocked) { removeOverlay(); return }
-        if (overlay == null) showOverlay()
-        if (overlay == null) return
-        val relevant = clock.focus.sessions.value.filter { packageName in it.targets() }
-        val end = relevant.maxOfOrNull { it.endAt } ?: return
-        val seconds = ((end - System.currentTimeMillis()).coerceAtLeast(0) + 999) / 1000
-        val pending = clock.focus.sessions.value.firstOrNull { it.state == "RELEASE_PENDING" }
-        token = pending?.releaseToken
-        val remaining = token?.let { clock.focus.remaining(it) } ?: 0
-        val endText = Instant.ofEpochMilli(end).atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("HH:mm"))
-        val appLabel = appLabels.getOrPut(packageName) {
-            try { packageManager.getApplicationLabel(packageManager.getApplicationInfo(packageName, 0)).toString() }
+    private fun render(presentation: FocusPresentation?) {
+        if (presentation == null) { removeOverlay(); return }
+        if (overlay == null) {
+            val view = FocusOverlayView(this,
+                onHome = { performGlobalAction(GLOBAL_ACTION_HOME); removeOverlay() },
+                onRelease = { controller?.requestRelease() }, onCancel = { controller?.cancelRelease() })
+            windowManager.addView(view, WindowManager.LayoutParams(-1, -1, WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN, android.graphics.PixelFormat.OPAQUE))
+            overlay = view
+        }
+        val endText = Instant.ofEpochMilli(presentation.endAt).atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("HH:mm"))
+        val appLabel = appLabels.getOrPut(presentation.packageName) {
+            try { packageManager.getApplicationLabel(packageManager.getApplicationInfo(presentation.packageName, 0)).toString() }
             catch (_: android.content.pm.PackageManager.NameNotFoundException) { "此应用" }
         }
-        overlay?.render(seconds, endText, appLabel, token != null, remaining)
+        overlay?.render(presentation.seconds, endText, appLabel, presentation.releaseToken != null, presentation.waitRemaining)
     }
-    private fun showOverlay() {
-        val scroll = FocusOverlayView(this,
-            onHome = { performGlobalAction(GLOBAL_ACTION_HOME); removeOverlay() },
-            onRelease = {
-                scope.launch {
-                    withContext(Dispatchers.IO) {
-                        val current = token
-                        if (current == null) clock.focus.beginRelease() else clock.focus.confirmRelease(current)
-                    }
-                    render()
-                }
-            },
-            onCancel = { token?.let { t -> scope.launch { withContext(Dispatchers.IO) { clock.focus.cancelRelease(t) }; render() } } },
-        )
-        try {
-            windowManager.addView(scroll, WindowManager.LayoutParams(-1, -1, WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN, android.graphics.PixelFormat.OPAQUE))
-            overlay = scroll
-            overlayFailed = false
-        } catch (e: RuntimeException) {
-            overlayFailed = true
-            FocusServiceRuntime.checked(FocusProtectionStatus.OVERLAY_UNAVAILABLE)
-            android.util.Log.e("Daybreak", "Overlay unavailable; retrying", e)
-        }
-    }
-    private fun removeOverlay() { overlay?.let { runCatching { windowManager.removeView(it) } }; overlay = null; overlayFailed = false }
+    private fun removeOverlay() { overlay?.let { runCatching { windowManager.removeView(it) } }; overlay = null }
     override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
         super.onConfigurationChanged(newConfig)
-        // Rebuild presentation for live theme, font size, and orientation changes.
-        // The active windows and emergency wait continue in the engine.
-        removeOverlay()
-        if (::safeApps.isInitialized) {
-            try { render() }
-            catch (e: Exception) {
-                FocusServiceRuntime.checked(FocusProtectionStatus.CHECK_FAILED)
-                android.util.Log.e("Daybreak", "Focus presentation refresh failed; retrying", e)
-            }
-        }
+        removeOverlay(); controller?.windowChanged()
     }
     override fun onInterrupt() { removeOverlay() }
-    override fun onUnbind(intent: Intent?): Boolean {
-        job?.cancel()
-        foregroundPackage = null
-        removeOverlay()
-        FocusServiceRuntime.disconnected()
-        return super.onUnbind(intent)
-    }
-    override fun onDestroy() { job?.cancel(); scope.cancel(); removeOverlay(); FocusServiceRuntime.disconnected(); super.onDestroy() }
+    private fun disconnected() { controller?.close(); controller = null; removeOverlay(); FocusServiceRuntime.disconnected() }
+    override fun onUnbind(intent: Intent?): Boolean { disconnected(); return super.onUnbind(intent) }
+    override fun onDestroy() { disconnected(); scope.cancel(); super.onDestroy() }
 }

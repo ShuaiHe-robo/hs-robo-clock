@@ -8,7 +8,9 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.daybreak.clock.data.Alarm
 import dev.daybreak.clock.domain.MathChallenge
-import dev.daybreak.clock.platform.alarm.AndroidAlarmScheduler
+import dev.daybreak.clock.platform.execution.AndroidExecutionScheduler
+import dev.daybreak.clock.domain.execution.ScheduledWake
+import dev.daybreak.clock.domain.execution.WakeKey
 import kotlinx.coroutines.*
 import org.junit.Assert.*
 import org.junit.Assume.assumeTrue
@@ -21,7 +23,7 @@ class SilentPlatformTest {
     @Test fun exactCallbackStartsForegroundServiceAndUnreadableRingtoneFallsBack() = runBlocking {
         assumeTrue(Build.FINGERPRINT.contains("generic") || Build.MODEL.contains("sdk_gphone"))
         val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext as ClockApplication
-        assumeTrue(AndroidAlarmScheduler(app).allowed())
+        assumeTrue(AndroidExecutionScheduler(app).exactAllowed())
         val scenario = ActivityScenario.launch(MainActivity::class.java)
         val alarm = Alarm(label = "无声平台测试", days = 0, mathUnlockEnabled = true,
             ringtoneUri = "content://dev.daybreak.missing/no-file", ringtoneSource = "FILE", ringtoneDisplayName = "失效文件")
@@ -31,7 +33,7 @@ class SilentPlatformTest {
             val due = pending.copy(scheduledAt = System.currentTimeMillis() + 3000)
             app.bootStore.putSession(due)
             app.database.dao().saveRinging(due)
-            assertNull(AndroidAlarmScheduler(app).schedule(due))
+            assertNull(AndroidExecutionScheduler(app).schedule(ScheduledWake(WakeKey.alarm(due.id), due.scheduledAt)).error)
             withTimeout(15_000) { while (app.bootStore.session(due.id)?.state != "RINGING") delay(100) }
             withTimeout(15_000) { while (app.bootStore.session(due.id)?.fallbackUsed != true) delay(100) }
             assertTrue(app.getSystemService(NotificationManager::class.java).activeNotifications.any { it.id == 1001 })
