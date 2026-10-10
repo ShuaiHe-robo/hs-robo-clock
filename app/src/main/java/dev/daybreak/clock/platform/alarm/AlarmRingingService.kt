@@ -4,6 +4,7 @@ import android.app.*
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.*
+import android.provider.Settings
 import androidx.core.app.NotificationCompat
 import dev.daybreak.clock.R
 import dev.daybreak.clock.clock
@@ -64,6 +65,19 @@ class AlarmRingingService : Service() {
             if (next.vibrate) vibrator?.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 500, 700), 0))
         }
         getSystemService(NotificationManager::class.java).notify(1001, notification(next, changed))
+        if (changed) showRingingSurface(next)
+    }
+    private fun showRingingSurface(session: RingingSession) {
+        // SAW is a documented background Activity launch exception. The same Activity
+        // covers other apps and the keyguard without dismissing the device lock.
+        if (Settings.canDrawOverlays(this)) {
+            try {
+                startActivity(Intent(this, AlarmActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                clock.alarmReliability.event("RINGING_SURFACE_REQUESTED", session.id)
+            } catch (e: RuntimeException) {
+                clock.alarmReliability.event("RINGING_SURFACE_FAILED", session.id, e.toString())
+            }
+        } else clock.alarmReliability.event("RINGING_SURFACE_NOTIFICATION", session.id, "Overlay permission unavailable")
     }
     private fun notification(session: RingingSession?, fullScreen: Boolean): Notification {
         val open = PendingIntent.getActivity(this, 0, Intent(this, AlarmActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
@@ -72,8 +86,9 @@ class AlarmRingingService : Service() {
             .setContentTitle(session?.label?.takeIf { it.isNotBlank() } ?: "闹钟响铃")
             .setContentText(if (session?.mathUnlockEnabled == true) "点按进入，答对算术题关闭" else "点按进入关闭闹钟")
             .setCategory(NotificationCompat.CATEGORY_ALARM).setPriority(NotificationCompat.PRIORITY_MAX)
+            .setOnlyAlertOnce(!fullScreen)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC).setOngoing(true).setAutoCancel(false)
-            .setContentIntent(open).apply { if (fullScreen) setFullScreenIntent(open, true) }.build()
+            .setContentIntent(open).apply { if (session != null) setFullScreenIntent(open, true) }.build()
     }
     override fun onBind(intent: Intent?) = null
     override fun onDestroy() {

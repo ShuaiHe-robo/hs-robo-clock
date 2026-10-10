@@ -63,7 +63,7 @@ fun TimerScreen(vm: ClockViewModel, capabilities: Capabilities, busy: Boolean,
         val wide = maxWidth >= 560.dp && maxHeight < 400.dp
         val compact = wide || maxHeight < 520.dp
         val showHeading = timer != null || (!wide && maxHeight >= 400.dp) ||
-            !capabilities.exact || !capabilities.notifications || !capabilities.fullScreen
+            !capabilities.exact || !capabilities.notifications || !capabilities.fullScreen || !capabilities.alarmOverlay
         val minHeight = (if (wide) (if (timer == null && showHeading) 260f else 180f)
             else if (timer == null) (if (!showHeading) 360f else if (compact) 400f else 460f) else 330f) * maxOf(1f, fontScale * .85f)
         val scroll = rememberScrollState()
@@ -133,10 +133,15 @@ private fun TimerHeading(timer: TimerSession?, left: Long, now: Long, compact: B
             }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
         } else if (!compact) Text("留一段时间，做眼前的事", style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant)
-        if (!capabilities.exact || !capabilities.notifications || !capabilities.fullScreen) {
+        if (!capabilities.exact || !capabilities.notifications || !capabilities.fullScreen || !capabilities.alarmOverlay) {
             TextButton(onClick = onSettings, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) {
                 Icon(Icons.Outlined.Info, null, Modifier.size(16.dp)); Spacer(Modifier.width(6.dp))
-                Text(if (!capabilities.exact) "允许精确闹钟" else if (!capabilities.notifications) "通知已关闭 · 检查权限" else "全屏未授权 · 通知提醒",
+                Text(when {
+                    !capabilities.exact -> "允许精确闹钟"
+                    !capabilities.notifications -> "通知已关闭 · 检查权限"
+                    !capabilities.fullScreen -> "锁屏全屏未授权 · 检查权限"
+                    else -> "全局蒙版未授权 · 检查权限"
+                },
                     style = MaterialTheme.typography.bodySmall)
             }
         }

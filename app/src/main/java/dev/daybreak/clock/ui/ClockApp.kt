@@ -177,8 +177,8 @@ private fun AlarmList(state: ClockState, sessions: List<RingingSession>, capabil
             }
             CountdownHeading(title, detail)
         }
-        if (!capabilities.exact || !capabilities.notifications || !capabilities.fullScreen) item {
-            CapabilityNotice(if (!capabilities.exact) "精确闹钟尚未授权" else if (!capabilities.notifications) "通知已关闭，响铃入口可能无法显示" else "全屏提醒尚未授权，将使用通知入口", onSettings)
+        if (!capabilities.exact || !capabilities.notifications || !capabilities.fullScreen || !capabilities.alarmOverlay) item {
+            CapabilityNotice(if (!capabilities.exact) "精确闹钟尚未授权" else if (!capabilities.notifications) "通知已关闭，响铃入口可能无法显示" else if (!capabilities.fullScreen) "锁屏全屏提醒尚未授权" else "响铃蒙版尚未授权，使用其他应用时将显示通知", onSettings)
         }
         if (missed.isNotEmpty() || reliability.showStopNotice) item {
             Surface(shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.errorContainer) {
@@ -370,12 +370,12 @@ private fun SettingsScreen(capabilities: Capabilities, dark: Boolean, state: Clo
     val context = LocalContext.current
     val reliability by vm.alarmReliability.collectAsStateWithLifecycle()
     var openDrawer by rememberSaveable { mutableStateOf<String?>(null) }
-    val ready = listOf(capabilities.exact, capabilities.notifications, capabilities.fullScreen, capabilities.accessibility).count { it }
+    val ready = listOf(capabilities.exact, capabilities.notifications, capabilities.fullScreen, capabilities.alarmOverlay, capabilities.accessibility).count { it }
     LazyColumn(modifier.fillMaxHeight(), contentPadding = PaddingValues(24.dp, 24.dp, 24.dp, bottomClearance), verticalArrangement = Arrangement.spacedBy(18.dp)) {
         item { PageHeading("设置") }
         item {
-            SettingsEntry("运行权限", if (ready == 4) "$ready / 4 已授权" else "$ready / 4 已授权 · ${4 - ready} 项需检查",
-                if (ready == 4) Icons.Outlined.CheckCircle else Icons.Outlined.Info) { openDrawer = "permissions" }
+            SettingsEntry("运行权限", if (ready == 5) "$ready / 5 已授权" else "$ready / 5 已授权 · ${5 - ready} 项需检查",
+                if (ready == 5) Icons.Outlined.CheckCircle else Icons.Outlined.Info) { openDrawer = "permissions" }
         }
         item { SettingsEntry("闹钟后台运行", if (capabilities.backgroundRestricted) "系统限制后台运行，请检查" else "电池与厂商后台设置", Icons.Outlined.BatteryFull) { openDrawer = "background" } }
         item { SettingsEntry("闹钟运行记录", "计划恢复、到点触发与声音播放", Icons.Outlined.History) { openDrawer = "alarm-history" } }
@@ -394,14 +394,17 @@ private fun SettingsScreen(capabilities: Capabilities, dark: Boolean, state: Clo
         }
     }
     when (openDrawer) {
-        "permissions" -> SettingsDrawer("运行权限", "$ready / 4 已授权", "关闭权限抽屉", onDismiss = { openDrawer = null }) {
+        "permissions" -> SettingsDrawer("运行权限", "$ready / 5 已授权", "关闭权限抽屉", onDismiss = { openDrawer = null }) {
             item { SettingRow("精确闹钟", if (capabilities.exact) "已允许" else "未允许，闹钟无法排程", capabilities.exact) {
                 if (Build.VERSION.SDK_INT in 31..32) context.openSetting(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM)
                 else if (!capabilities.exact) context.openSetting(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
             } }
             item { SettingRow("通知", if (capabilities.notifications) "已允许" else "未允许，点击开启", capabilities.notifications, requestNotifications) }
-            item { SettingRow("锁屏全屏提醒", if (capabilities.fullScreen) "已允许，系统仍可能展示横幅" else "未允许，将使用通知入口", capabilities.fullScreen) {
+            item { SettingRow("锁屏全屏提醒", if (capabilities.fullScreen) "已允许，锁屏时可直接关闭提醒" else "未允许，将使用通知入口", capabilities.fullScreen) {
                 if (Build.VERSION.SDK_INT >= 34) context.openSetting(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT)
+            } }
+            item { SettingRow("响铃全局蒙版", if (capabilities.alarmOverlay) "已允许，闹钟和计时器到时自动弹出" else "允许显示在其他应用上层，到时自动弹出", capabilities.alarmOverlay) {
+                context.openSetting(Settings.ACTION_MANAGE_OVERLAY_PERMISSION)
             } }
             item { SettingRow("定时应用锁", focusStatusText(capabilities.focusStatus), capabilities.accessibility) {
                 context.openSetting(Settings.ACTION_ACCESSIBILITY_SETTINGS)
@@ -448,6 +451,8 @@ private fun alarmEventText(stage: String): String? = when (stage) {
     "RINGING" -> "开始响铃会话"
     "AUDIO_STARTED" -> "开始播放铃声"
     "AUDIO_FALLBACK" -> "尝试备用铃声"
+    "RINGING_SURFACE_VISIBLE" -> "响铃蒙版已显示"
+    "RINGING_SURFACE_FAILED" -> "蒙版显示失败，请从通知进入"
     "ENDED" -> "响铃已关闭"
     "MISSED" -> "闹钟未按计划响铃"
     "DELIVERY_FAILED", "SERVICE_START_FAILED" -> "响铃启动失败"
